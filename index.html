@@ -39,16 +39,14 @@
   .icon-btn:active { transform:scale(.92); }
   .icon-btn svg { width:20px; height:20px; }
 
-  /* bottom toolbar */
+  /* bottom toolbar: docked flush to the screen edge, home-indicator space inside */
   .toolbar {
-    position:fixed; left:12px; right:12px;
-    bottom:calc(12px + env(safe-area-inset-bottom));
-    padding:12px 14px;
-    border-radius:24px;
-    background:rgba(255,253,249,.82);
+    position:fixed; left:0; right:0; bottom:0;
+    padding:12px 16px calc(10px + env(safe-area-inset-bottom));
+    border-radius:22px 22px 0 0;
+    background:rgba(255,253,249,.92);
     backdrop-filter:blur(16px) saturate(1.5); -webkit-backdrop-filter:blur(16px) saturate(1.5);
-    border:1px solid rgba(255,255,255,.65);
-    box-shadow:0 6px 30px rgba(58,55,51,.15);
+    box-shadow:0 -4px 24px rgba(58,55,51,.14);
     display:flex; flex-direction:column; gap:10px;
   }
   .row { display:flex; align-items:center; gap:12px; }
@@ -139,13 +137,21 @@ if ('serviceWorker' in navigator) {
   var dpr = Math.min(window.devicePixelRatio || 1, 3);
   var W, H;
 
-  // Sized once on load; no reaction to rotation/resize (per spec).
+  // Canvas always fits the real viewport. iOS reports a transient viewport while
+  // launching; whenever the size genuinely changes we re-fit and start fresh
+  // (no drawing preservation across size changes, per spec).
   function setup() {
     W = window.innerWidth;
     H = window.innerHeight;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function refit() {
+    if (window.innerWidth !== W || window.innerHeight !== H) {
+      setup();
+      newBlob();
+    }
   }
 
   // ---------- palettes ----------
@@ -378,6 +384,12 @@ if ('serviceWorker' in navigator) {
   // ---------- go ----------
   setup();
   newBlob();
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(refit, 150); // settle first, then re-fit once
+  });
+  window.addEventListener('load', refit);
 })();
 </script>
 </body>

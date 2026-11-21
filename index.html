@@ -39,14 +39,18 @@
   .icon-btn:active { transform:scale(.92); }
   .icon-btn svg { width:20px; height:20px; }
 
-  /* bottom toolbar: docked flush to the screen edge, home-indicator space inside */
+  /* bottom toolbar: circled floating pill. env(safe-area-inset-bottom) adapts the
+     offset to the mode automatically: home-indicator zone in the installed PWA,
+     zero above Safari's own toolbar in the browser */
   .toolbar {
-    position:fixed; left:0; right:0; bottom:0;
-    padding:12px 16px calc(10px + env(safe-area-inset-bottom));
-    border-radius:22px 22px 0 0;
-    background:rgba(255,253,249,.92);
+    position:fixed; left:12px; right:12px;
+    bottom:calc(12px + env(safe-area-inset-bottom));
+    padding:12px 14px;
+    border-radius:24px;
+    background:rgba(255,253,249,.82);
     backdrop-filter:blur(16px) saturate(1.5); -webkit-backdrop-filter:blur(16px) saturate(1.5);
-    box-shadow:0 -4px 24px rgba(58,55,51,.14);
+    border:1px solid rgba(255,255,255,.65);
+    box-shadow:0 6px 30px rgba(58,55,51,.15);
     display:flex; flex-direction:column; gap:10px;
   }
   .row { display:flex; align-items:center; gap:12px; }
@@ -79,6 +83,30 @@
   }
   .swatch.active { box-shadow:0 0 0 2px rgba(255,255,255,.9), 0 0 0 4px rgba(58,55,51,.55); }
   .swatch:active { transform:scale(.9); }
+
+  /* screenshot result overlay */
+  .shot-overlay {
+    position:fixed; inset:0; z-index:10;
+    background:rgba(24,20,16,.6);
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .shot-overlay[hidden] { display:none; }
+  .shot-card {
+    background:#fffdf9; border-radius:20px; padding:14px; width:100%; max-width:320px;
+    box-shadow:0 12px 40px rgba(0,0,0,.4);
+    display:flex; flex-direction:column; gap:10px;
+  }
+  #shotImage {
+    width:100%; border-radius:12px; display:block; background:#eee;
+    -webkit-touch-callout:default; -webkit-user-select:auto; user-select:auto;
+  }
+  .shot-actions { display:flex; gap:8px; }
+  .shot-btn {
+    flex:1; height:44px; border:none; border-radius:12px; background:var(--ink);
+    color:#fffdf9; font-size:15px; font-weight:600; cursor:pointer; touch-action:manipulation;
+  }
+  .shot-btn.ghost { background:rgba(58,55,51,.1); color:var(--ink); }
+  .shot-hint { margin:0; text-align:center; font-size:12px; color:rgba(58,55,51,.6); }
 </style>
 </head>
 <body>
@@ -90,11 +118,23 @@
       <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>
     </svg>
   </button>
-  <button class="icon-btn" id="clearBtn" aria-label="Clear" title="Clear">
+  <button class="icon-btn" id="shotBtn" aria-label="Screenshot" title="Screenshot">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+      <circle cx="12" cy="13" r="3"/>
     </svg>
   </button>
+</div>
+
+<div class="shot-overlay" id="shotOverlay" hidden>
+  <div class="shot-card">
+    <img id="shotImage" alt="Your doodle">
+    <div class="shot-actions">
+      <button class="shot-btn" id="shotShareBtn">Share / Save</button>
+      <button class="shot-btn ghost" id="shotCloseBtn">Close</button>
+    </div>
+    <p class="shot-hint">Long-press the image &rarr; &ldquo;Add to Photos&rdquo;</p>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -170,7 +210,9 @@ if ('serviceWorker' in navigator) {
 
   function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
 
+  var currentBg = '#F5EBDD';
   function applyBackground(bg) {
+    currentBg = bg;
     document.body.style.background = bg;
     document.documentElement.style.setProperty('--paper', bg);
     var meta = document.querySelector('meta[name="theme-color"]');
@@ -189,7 +231,9 @@ if ('serviceWorker' in navigator) {
   var sizeDot = document.getElementById('sizeDot');
   var swatchesEl = document.getElementById('swatches');
   var newBlobBtn = document.getElementById('newBlobBtn');
-  var clearBtn = document.getElementById('clearBtn');
+  var shotBtn = document.getElementById('shotBtn');
+  var shotOverlay = document.getElementById('shotOverlay');
+  var shotImage = document.getElementById('shotImage');
 
   // ---------- blob ----------
   function newBlob() {
@@ -379,7 +423,54 @@ if ('serviceWorker' in navigator) {
   });
 
   newBlobBtn.addEventListener('click', newBlob);
-  clearBtn.addEventListener('click', function () { ctx.clearRect(0, 0, W, H); });
+  // ---------- screenshot ----------
+  // The canvas holds only the artwork (UI is separate DOM), so composing it over
+  // the current background colour gives the finished picture with no toolbar.
+  var lastShotBlob = null;
+
+  function makeShot() {
+    var out = document.createElement('canvas');
+    out.width = canvas.width;
+    out.height = canvas.height;
+    var octx = out.getContext('2d');
+    octx.fillStyle = currentBg;
+    octx.fillRect(0, 0, out.width, out.height);
+    octx.drawImage(canvas, 0, 0);
+    out.toBlob(function (blob) {
+      lastShotBlob = blob;
+      shotImage.src = URL.createObjectURL(blob);
+      shotOverlay.hidden = false;
+    }, 'image/png');
+  }
+
+  function closeShot() {
+    shotOverlay.hidden = true;
+    if (shotImage.src) {
+      URL.revokeObjectURL(shotImage.src);
+      shotImage.removeAttribute('src');
+    }
+  }
+
+  shotBtn.addEventListener('click', makeShot);
+  document.getElementById('shotCloseBtn').addEventListener('click', closeShot);
+  shotOverlay.addEventListener('click', function (e) {
+    if (e.target === shotOverlay) closeShot();
+  });
+  document.getElementById('shotShareBtn').addEventListener('click', function () {
+    if (!lastShotBlob) return;
+    var file = new File([lastShotBlob], 'blob.png', { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file] }).catch(function () {});
+    } else {
+      // desktop fallback: plain download
+      var a = document.createElement('a');
+      a.href = shotImage.src;
+      a.download = 'blob.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  });
 
   // ---------- go ----------
   setup();

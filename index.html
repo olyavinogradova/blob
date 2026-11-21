@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Blob">
+<meta name="theme-color" content="#F5EBDD">
+<title>Blob</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="./favicon.png">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<style>
+  :root { --paper:#faf6ef; --ink:#3a3733; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; overscroll-behavior:none; }
+  body {
+    position:fixed; inset:0; background:var(--paper);
+    font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  }
+  #canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; display:block; }
+
+  /* top-right actions */
+  .top-actions {
+    position:fixed; top:0; right:0;
+    padding:calc(10px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right)) 0 0;
+    display:flex; gap:10px;
+  }
+  .icon-btn {
+    width:42px; height:42px; border-radius:50%;
+    border:1px solid rgba(0,0,0,.06);
+    background:rgba(255,255,255,.75);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    color:var(--ink); display:flex; align-items:center; justify-content:center;
+    box-shadow:0 2px 10px rgba(0,0,0,.10); cursor:pointer; touch-action:manipulation;
+  }
+  .icon-btn:active { transform:scale(.92); }
+  .icon-btn svg { width:20px; height:20px; }
+
+  /* bottom toolbar */
+  .toolbar {
+    position:fixed; left:12px; right:12px;
+    bottom:calc(12px + env(safe-area-inset-bottom));
+    padding:12px 14px;
+    border-radius:24px;
+    background:rgba(255,253,249,.82);
+    backdrop-filter:blur(16px) saturate(1.5); -webkit-backdrop-filter:blur(16px) saturate(1.5);
+    border:1px solid rgba(255,255,255,.65);
+    box-shadow:0 6px 30px rgba(58,55,51,.15);
+    display:flex; flex-direction:column; gap:10px;
+  }
+  .row { display:flex; align-items:center; gap:12px; }
+  .tools { display:flex; background:rgba(58,55,51,.08); border-radius:14px; padding:3px; flex:none; }
+  .tool {
+    width:46px; height:38px; border:none; border-radius:11px; background:transparent;
+    color:var(--ink); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; touch-action:manipulation;
+  }
+  .tool.active { background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.16); }
+  .tool svg { width:19px; height:19px; }
+
+  .size-preview { width:36px; height:36px; flex:none; display:flex; align-items:center; justify-content:center; }
+  #sizeDot { border-radius:50%; background:var(--ink); }
+  #sizeDot.eraser { background:transparent; border:2px dashed rgba(58,55,51,.55); }
+
+  input[type=range] { -webkit-appearance:none; appearance:none; flex:1; min-width:0; height:38px; background:transparent; }
+  input[type=range]::-webkit-slider-runnable-track { height:6px; border-radius:3px; background:rgba(58,55,51,.15); }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance:none; appearance:none; width:26px; height:26px; border-radius:50%;
+    background:#fff; border:1px solid rgba(0,0,0,.06); box-shadow:0 2px 6px rgba(0,0,0,.3);
+    margin-top:-10px;
+  }
+
+  .swatches { display:flex; justify-content:space-between; }
+  .swatches.dim { opacity:.35; pointer-events:none; }
+  .swatch {
+    width:37px; height:37px; border-radius:50%;
+    border:1px solid rgba(0,0,0,.08); cursor:pointer; touch-action:manipulation;
+  }
+  .swatch.active { box-shadow:0 0 0 2px rgba(255,255,255,.9), 0 0 0 4px rgba(58,55,51,.55); }
+  .swatch:active { transform:scale(.9); }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div class="top-actions">
+  <button class="icon-btn" id="newBlobBtn" aria-label="New blob" title="New blob">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>
+    </svg>
+  </button>
+  <button class="icon-btn" id="clearBtn" aria-label="Clear" title="Clear">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+    </svg>
+  </button>
+</div>
+
+<div class="toolbar">
+  <div class="row">
+    <div class="tools">
+      <button class="tool active" id="brushBtn" aria-label="Brush">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/>
+          <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>
+        </svg>
+      </button>
+      <button class="tool" id="eraserBtn" aria-label="Eraser">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/>
+          <path d="M22 21H7"/><path d="m5 11 9 9"/>
+        </svg>
+      </button>
+    </div>
+    <div class="size-preview"><div id="sizeDot"></div></div>
+    <input type="range" id="sizeSlider" min="2" max="80" step="1" value="8" aria-label="Size">
+  </div>
+  <div class="swatches" id="swatches"></div>
+</div>
+
+<script>
+// PWA: register the service worker for offline support (relative path works under a subpath)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('./sw.js').catch(function () {});
+  });
+}
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 3);
+  var W, H;
+
+  // Sized once on load; no reaction to rotation/resize (per spec).
+  function setup() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  // ---------- palettes ----------
+  var PALETTES = [
+    // Playful Garden
+    ['#F4D35E', '#EE964B', '#E76F51', '#7BAE7F', '#3D8C83', '#74B3CE', '#8B78A6', '#594F46'],
+    // Candy Universe
+    ['#FF6B81', '#F7A8C4', '#F9D65C', '#8DD3C7', '#4CB7C5', '#7986CB', '#A58BD4', '#FFF0DC'],
+    // Electric Nature
+    ['#F4E04D', '#F29E4C', '#E85D75', '#C06C84', '#6A8D73', '#2A9D8F', '#4381B8', '#343A56'],
+    // Midnight Cinema
+    ['#18243A', '#344C64', '#527C83', '#8A9B91', '#D5BFA3', '#E6A15C', '#C76B63', '#B6A0C8'],
+    // Paper & Ink
+    ['#F5EBDD', '#202020', '#E63946', '#F4B942', '#235789', '#70A288', '#A44A3F', '#B8A7C9']
+  ];
+
+  function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
+
+  function applyBackground(bg) {
+    document.body.style.background = bg;
+    document.documentElement.style.setProperty('--paper', bg);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', bg);
+  }
+
+  // ---------- state ----------
+  var tool = 'brush';
+  var brushColor = '#3a3733';
+  var sizes = { brush: 8, eraser: 28 };
+
+  // ---------- DOM refs ----------
+  var brushBtn = document.getElementById('brushBtn');
+  var eraserBtn = document.getElementById('eraserBtn');
+  var slider = document.getElementById('sizeSlider');
+  var sizeDot = document.getElementById('sizeDot');
+  var swatchesEl = document.getElementById('swatches');
+  var newBlobBtn = document.getElementById('newBlobBtn');
+  var clearBtn = document.getElementById('clearBtn');
+
+  // ---------- blob ----------
+  function newBlob() {
+    // the eraser may have left destination-out active; always paint normally here
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, W, H);
+
+    // one random palette: one colour for the blob, one for the paper, rest to draw with
+    var palette = pick(PALETTES).slice();
+    var blobColor = palette.splice(Math.floor(Math.random() * palette.length), 1)[0];
+    var bgColor = palette.splice(Math.floor(Math.random() * palette.length), 1)[0];
+    applyBackground(bgColor);
+
+    // crazy cloud-like figure: radius modulated by random harmonics (always smooth,
+    // no corners), plus lumps that merge into the silhouette and a detached puff
+    var cx = W / 2;
+    var cy = H * 0.44; // slightly above centre, clear of the toolbar
+    var R = Math.min(W, H) * (0.20 + Math.random() * 0.09);
+    var harmonics = [];
+    var hCount = 2 + Math.floor(Math.random() * 2); // 2-3
+    for (var i = 0; i < hCount; i++) {
+      harmonics.push({
+        k: 2 + Math.floor(Math.random() * 4), // 2-5 lobes
+        a: 0.08 + Math.random() * 0.14,
+        p: Math.random() * Math.PI * 2
+      });
+    }
+    function radiusAt(t) {
+      var r = 1;
+      for (var hi = 0; hi < harmonics.length; hi++) {
+        var hm = harmonics[hi];
+        r += hm.a * Math.sin(hm.k * t + hm.p);
+      }
+      return R * Math.max(r, 0.45);
+    }
+
+    ctx.fillStyle = blobColor;
+    ctx.beginPath();
+    var steps = 84; // dense sampling keeps the silhouette round even as straight segments
+    for (var s = 0; s <= steps; s++) {
+      var t = (s / steps) * Math.PI * 2;
+      var r = radiusAt(t);
+      var x = cx + Math.cos(t) * r;
+      var y = cy + Math.sin(t) * r;
+      if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // cloud lumps hugging the edge, same colour so they melt into the figure
+    var lumps = Math.floor(Math.random() * 4); // 0-3
+    for (var l = 0; l < lumps; l++) {
+      var la = Math.random() * Math.PI * 2;
+      var lr = radiusAt(la) * (0.80 + Math.random() * 0.18);
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(la) * lr, cy + Math.sin(la) * lr, R * (0.16 + Math.random() * 0.22), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // occasional small detached puff, like a cloud shedding one
+    if (Math.random() < 0.3) {
+      var sa = Math.random() * Math.PI * 2;
+      var sd = R * (1.25 + Math.random() * 0.35);
+      var sx = Math.min(Math.max(cx + Math.cos(sa) * sd, 30), W - 30);
+      var sy = Math.min(Math.max(cy + Math.sin(sa) * sd, 90), H - 270);
+      ctx.beginPath();
+      ctx.arc(sx, sy, R * (0.10 + Math.random() * 0.10), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    buildSwatches(palette);
+  }
+
+  // ---------- swatches ----------
+  function buildSwatches(colors) {
+    swatchesEl.innerHTML = '';
+    colors.forEach(function (color, i) {
+      var b = document.createElement('button');
+      b.className = 'swatch';
+      b.style.background = color;
+      b.setAttribute('aria-label', 'Colour ' + color);
+      b.addEventListener('click', function () { selectColor(color, b); });
+      swatchesEl.appendChild(b);
+      if (i === 0) selectColor(color, b); // default: first colour of the set
+    });
+  }
+
+  function selectColor(color, btn) {
+    brushColor = color;
+    Array.prototype.forEach.call(swatchesEl.children, function (el) {
+      el.classList.toggle('active', el === btn);
+    });
+    updateSizeDot();
+  }
+
+  // ---------- drawing ----------
+  var drawing = false;
+  var activePointerId = null;
+  var last, prevMid;
+
+  function currentSize() { return sizes[tool]; }
+
+  function applyTool() {
+    ctx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+    ctx.globalAlpha = 1; // brush is fully opaque: covers everything, even black
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = currentSize();
+    ctx.strokeStyle = tool === 'eraser' ? '#000' : brushColor;
+    ctx.fillStyle = ctx.strokeStyle;
+  }
+
+  function dot(p) {
+    applyTool();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, currentSize() / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function segment(from, to) {
+    var mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+    applyTool();
+    ctx.beginPath();
+    ctx.moveTo(prevMid.x, prevMid.y);
+    ctx.quadraticCurveTo(from.x, from.y, mid.x, mid.y);
+    ctx.stroke();
+    prevMid = mid;
+  }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    if (activePointerId !== null) return; // ignore extra fingers
+    activePointerId = e.pointerId;
+    drawing = true;
+    last = { x: e.clientX, y: e.clientY };
+    prevMid = last;
+    dot(last);
+    if (canvas.setPointerCapture) {
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!drawing || e.pointerId !== activePointerId) return;
+    var p = { x: e.clientX, y: e.clientY };
+    segment(last, p);
+    last = p;
+  });
+  function endStroke(e) {
+    if (e.pointerId !== activePointerId) return;
+    drawing = false;
+    activePointerId = null;
+  }
+  canvas.addEventListener('pointerup', endStroke);
+  canvas.addEventListener('pointercancel', endStroke);
+  window.addEventListener('pointerup', endStroke);
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  // block iOS pinch-zoom on the page
+  document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+
+  // ---------- controls ----------
+  function updateSizeDot() {
+    var d = Math.max(6, Math.min(currentSize(), 28));
+    sizeDot.style.width = d + 'px';
+    sizeDot.style.height = d + 'px';
+    if (tool === 'eraser') sizeDot.classList.add('eraser');
+    else sizeDot.classList.remove('eraser');
+    if (tool !== 'eraser') sizeDot.style.background = brushColor;
+    else sizeDot.style.background = 'transparent';
+  }
+
+  function setTool(t) {
+    tool = t;
+    brushBtn.classList.toggle('active', t === 'brush');
+    eraserBtn.classList.toggle('active', t === 'eraser');
+    slider.value = sizes[t];
+    swatchesEl.classList.toggle('dim', t === 'eraser');
+    updateSizeDot();
+  }
+
+  brushBtn.addEventListener('click', function () { setTool('brush'); });
+  eraserBtn.addEventListener('click', function () { setTool('eraser'); });
+
+  slider.addEventListener('input', function () {
+    sizes[tool] = parseInt(slider.value, 10);
+    updateSizeDot();
+  });
+
+  newBlobBtn.addEventListener('click', newBlob);
+  clearBtn.addEventListener('click', function () { ctx.clearRect(0, 0, W, H); });
+
+  // ---------- go ----------
+  setup();
+  newBlob();
+})();
+</script>
+</body>
+</html>

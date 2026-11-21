@@ -1,0 +1,14 @@
+# Publish only the known site files — everything else stays local by default.
+# To publish a new file, allow it here with a "!/path" line.
+
+/*
+
+# The public Blob site
+!/.gitignore
+!/index.html
+!/manifest.json
+!/sw.js
+!/README.md
+!/favicon.png
+!/icons/
+!/icons/*

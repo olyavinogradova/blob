@@ -44,7 +44,7 @@
      zero above Safari's own toolbar in the browser */
   .toolbar {
     position:fixed; left:12px; right:12px;
-    bottom:calc(12px + env(safe-area-inset-bottom));
+    bottom:calc(6px + env(safe-area-inset-bottom));
     padding:12px 14px;
     border-radius:24px;
     background:rgba(255,253,249,.82);
@@ -113,9 +113,14 @@
 <canvas id="canvas"></canvas>
 
 <div class="top-actions">
+  <button class="icon-btn" id="undoBtn" aria-label="Undo" title="Undo last line">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/>
+    </svg>
+  </button>
   <button class="icon-btn" id="newBlobBtn" aria-label="New blob" title="New blob">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>
+      <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
     </svg>
   </button>
   <button class="icon-btn" id="shotBtn" aria-label="Screenshot" title="Screenshot">
@@ -231,6 +236,7 @@ if ('serviceWorker' in navigator) {
   var sizeDot = document.getElementById('sizeDot');
   var swatchesEl = document.getElementById('swatches');
   var newBlobBtn = document.getElementById('newBlobBtn');
+  var undoBtn = document.getElementById('undoBtn');
   var shotBtn = document.getElementById('shotBtn');
   var shotOverlay = document.getElementById('shotOverlay');
   var shotImage = document.getElementById('shotImage');
@@ -241,6 +247,7 @@ if ('serviceWorker' in navigator) {
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, W, H);
+    undoStack.length = 0; // fresh scene, nothing to undo into
 
     // one random palette: one colour for the blob, one for the paper, rest to draw with
     var palette = pick(PALETTES).slice();
@@ -306,6 +313,7 @@ if ('serviceWorker' in navigator) {
     }
 
     buildSwatches(palette);
+    updateLimitY(); // toolbar geometry follows the viewport
   }
 
   // ---------- swatches ----------
@@ -336,6 +344,45 @@ if ('serviceWorker' in navigator) {
   var last, prevMid;
 
   function currentSize() { return sizes[tool]; }
+
+  // the canvas ends at the toolbar: strokes cannot go below its top edge
+  var limitY = Infinity;
+  function updateLimitY() {
+    var rect = document.querySelector('.toolbar').getBoundingClientRect();
+    limitY = Math.max(rect.top, H * 0.5); // sanity floor
+  }
+
+  // keep the brush fully on the canvas: when the finger leaves the edge,
+  // the stroke hugs the edge at full thickness instead of fading off-screen
+  function clampPoint(p) {
+    var r = currentSize() / 2;
+    return {
+      x: Math.max(r, Math.min(p.x, W - r)),
+      y: Math.max(r, Math.min(p.y, limitY - r))
+    };
+  }
+
+  // ---------- undo (cancel last line) ----------
+  var undoStack = [];
+  var UNDO_MAX = 15;
+
+  function pushUndo() {
+    undoStack.push(canvas.toDataURL());
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+  }
+
+  function undoLast() {
+    if (drawing || !undoStack.length) return;
+    var url = undoStack.pop();
+    var img = new Image();
+    img.onload = function () {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(img, 0, 0, W, H);
+    };
+    img.src = url;
+  }
 
   function applyTool() {
     ctx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
@@ -368,7 +415,8 @@ if ('serviceWorker' in navigator) {
     if (activePointerId !== null) return; // ignore extra fingers
     activePointerId = e.pointerId;
     drawing = true;
-    last = { x: e.clientX, y: e.clientY };
+    pushUndo(); // snapshot before the stroke, so Undo cancels the whole line
+    last = clampPoint({ x: e.clientX, y: e.clientY });
     prevMid = last;
     dot(last);
     if (canvas.setPointerCapture) {
@@ -377,7 +425,7 @@ if ('serviceWorker' in navigator) {
   });
   canvas.addEventListener('pointermove', function (e) {
     if (!drawing || e.pointerId !== activePointerId) return;
-    var p = { x: e.clientX, y: e.clientY };
+    var p = clampPoint({ x: e.clientX, y: e.clientY });
     segment(last, p);
     last = p;
   });
@@ -423,19 +471,21 @@ if ('serviceWorker' in navigator) {
   });
 
   newBlobBtn.addEventListener('click', newBlob);
+  undoBtn.addEventListener('click', undoLast);
   // ---------- screenshot ----------
   // The canvas holds only the artwork (UI is separate DOM), so composing it over
   // the current background colour gives the finished picture with no toolbar.
   var lastShotBlob = null;
 
   function makeShot() {
+    // picture is cropped at the toolbar: that strip is the canvas edge, not part of the artwork
     var out = document.createElement('canvas');
     out.width = canvas.width;
-    out.height = canvas.height;
+    out.height = Math.max(1, Math.round(limitY * dpr));
     var octx = out.getContext('2d');
     octx.fillStyle = currentBg;
     octx.fillRect(0, 0, out.width, out.height);
-    octx.drawImage(canvas, 0, 0);
+    octx.drawImage(canvas, 0, 0); // anything below the crop simply falls outside
     out.toBlob(function (blob) {
       lastShotBlob = blob;
       shotImage.src = URL.createObjectURL(blob);

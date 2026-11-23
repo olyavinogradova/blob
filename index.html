@@ -15,12 +15,20 @@
   :root { --paper:#faf6ef; --ink:#3a3733; }
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { height:100%; overflow:hidden; overscroll-behavior:none; }
+  /* the body is the single viewport container: fixed to the layout viewport's
+     top-left, sized to the dynamic viewport (dvh) so it tracks the real visible
+     height as browser chrome comes and goes. Canvas and toolbar form one flex
+     column: the canvas ends exactly where the toolbar begins — by structure,
+     not by measured offsets. */
   body {
-    position:fixed; inset:0; background:var(--paper);
+    position:fixed; top:0; left:0; right:0;
+    height:100%; height:100dvh; /* fallback for engines without dvh */
+    display:flex; flex-direction:column;
+    background:var(--paper);
     font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
     -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
   }
-  #canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; display:block; }
+  #canvas { flex:1 1 auto; min-height:0; width:100%; touch-action:none; display:block; }
 
   /* top-right actions */
   .top-actions {
@@ -39,12 +47,12 @@
   .icon-btn:active { transform:scale(.92); }
   .icon-btn svg { width:20px; height:20px; }
 
-  /* bottom toolbar: circled floating pill. env(safe-area-inset-bottom) adapts the
-     offset to the mode automatically: home-indicator zone in the installed PWA,
-     zero above Safari's own toolbar in the browser */
+  /* bottom toolbar: circled floating pill, floated by its margins inside the
+     column. env(safe-area-inset-bottom) adapts the gap to the mode
+     automatically: home-indicator zone in the installed PWA, zero above
+     Safari's own toolbar in the browser */
   .toolbar {
-    position:fixed; left:12px; right:12px;
-    bottom:calc(6px + env(safe-area-inset-bottom));
+    margin:0 12px calc(6px + env(safe-area-inset-bottom));
     padding:12px 14px;
     border-radius:24px;
     background:rgba(255,253,249,.82);
@@ -182,18 +190,24 @@ if ('serviceWorker' in navigator) {
   var dpr = Math.min(window.devicePixelRatio || 1, 3);
   var W, H;
 
-  // Canvas always fits the real viewport. iOS reports a transient viewport while
-  // launching; whenever the size genuinely changes we re-fit and start fresh
-  // (no drawing preservation across size changes, per spec).
+  // Canvas always fits the real viewport. The CSS column sizes the canvas
+  // element; the bitmap is measured from the element's actual box (never from
+  // innerHeight, which disagrees with the fixed-position UI at launch and
+  // between browser/PWA modes). Whenever the box genuinely changes we re-fit
+  // and start fresh (no drawing preservation across size changes, per spec).
   function setup() {
-    W = window.innerWidth;
-    H = window.innerHeight;
+    var rect = canvas.getBoundingClientRect();
+    W = Math.max(1, Math.round(rect.width));
+    H = Math.max(1, Math.round(rect.height));
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   function refit() {
-    if (window.innerWidth !== W || window.innerHeight !== H) {
+    var rect = canvas.getBoundingClientRect();
+    var w = Math.max(1, Math.round(rect.width));
+    var h = Math.max(1, Math.round(rect.height));
+    if (w !== W || h !== H) {
       setup();
       newBlob();
     }
@@ -210,7 +224,9 @@ if ('serviceWorker' in navigator) {
     // Midnight Cinema
     ['#18243A', '#344C64', '#527C83', '#8A9B91', '#D5BFA3', '#E6A15C', '#C76B63', '#B6A0C8'],
     // Paper & Ink
-    ['#F5EBDD', '#202020', '#E63946', '#F4B942', '#235789', '#70A288', '#A44A3F', '#B8A7C9']
+    ['#F5EBDD', '#202020', '#E63946', '#F4B942', '#235789', '#70A288', '#A44A3F', '#B8A7C9'],
+    // Neon Lagoon
+    ['#00A6A6', '#00D1B2', '#B7E000', '#F0E442', '#FF6B35', '#F04B83', '#8B5CF6', '#30306B']
   ];
 
   function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
@@ -242,6 +258,198 @@ if ('serviceWorker' in navigator) {
   var shotImage = document.getElementById('shotImage');
 
   // ---------- blob ----------
+  // Each blob picks a "family" — its own silhouette recipe — so two blobs in a
+  // row rarely feel alike: round cloud, stretched pancake/egg, crescent (C) or
+  // hook (J). Every family follows the same rules: one solid colour, smooth
+  // outlines only (no corners ever), fits the viewport, clear of the top
+  // buttons and the toolbar. The classic cloud stays the anchor so the C's
+  // and J's feel like discoveries, not a pattern.
+  var FAMILIES = [
+    { name: 'classic', w: 0.40 },
+    { name: 'stretch', w: 0.20 },
+    { name: 'crescent', w: 0.20 },
+    { name: 'hook', w: 0.20 }
+  ];
+
+  function pickFamily() {
+    var total = 0, i;
+    for (i = 0; i < FAMILIES.length; i++) total += FAMILIES[i].w;
+    var roll = Math.random() * total;
+    for (i = 0; i < FAMILIES.length; i++) {
+      roll -= FAMILIES[i].w;
+      if (roll < 0) return FAMILIES[i].name;
+    }
+    return FAMILIES[0].name;
+  }
+
+  // random sine-wave recipe for an outline: k lobes, depth a, phase p
+  function harmonicSet(minK, maxK, count, aMin, aSpan) {
+    var hs = [];
+    for (var i = 0; i < count; i++) {
+      hs.push({
+        k: minK + Math.floor(Math.random() * (maxK - minK + 1)),
+        a: aMin + Math.random() * aSpan,
+        p: Math.random() * Math.PI * 2
+      });
+    }
+    return hs;
+  }
+
+  // normalized wobbly radius at angle t; the 0.45 floor keeps the shape from
+  // ever pinching shut, whatever the harmonics roll
+  function radiusAt(hs, t) {
+    var r = 1;
+    for (var i = 0; i < hs.length; i++) r += hs[i].a * Math.sin(hs[i].k * t + hs[i].p);
+    return Math.max(r, 0.45);
+  }
+
+  // wobbly disc, stretched by (sx, sy) and rotated by tilt around (cx, cy)
+  function wobblyDisc(cx, cy, R, hs, sx, sy, tilt) {
+    var cos = Math.cos(tilt), sin = Math.sin(tilt);
+    ctx.beginPath();
+    var steps = 84; // dense sampling keeps the silhouette round even as straight segments
+    for (var s = 0; s <= steps; s++) {
+      var t = (s / steps) * Math.PI * 2;
+      var r = R * radiusAt(hs, t);
+      var x = Math.cos(t) * r * sx, y = Math.sin(t) * r * sy;
+      var px = cx + x * cos - y * sin;
+      var py = cy + x * sin + y * cos;
+      if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Hook family: one thick round-ended stroke along a curve — j (curl at the
+  // bottom), cane (curl at the top) or snake (two bends) — tilted so hooks
+  // lean instead of always standing upright
+  function drawHook(cx, cy, R, p) {
+    var topY = Math.max(cy - R * 1.05, H * 0.12); // keep clear of the top buttons
+    var botY = Math.min(cy + R * 0.72, H * 0.62); // ...and of the toolbar
+    var x0 = cx + (Math.random() - 0.5) * R * 0.5;
+    var p0, p1, p2, p3 = null;
+    if (p.kind === 'snake') {
+      // two bends: an S-curve, fat in the middle, tapered at both ends
+      p0 = { x: x0, y: topY };
+      p1 = { x: x0 + p.dir * R * 0.65, y: topY + (botY - topY) * 0.33 };
+      p2 = { x: x0 - p.dir * R * 0.65, y: botY - (botY - topY) * 0.33 };
+      p3 = { x: x0 + (Math.random() - 0.5) * R * 0.3, y: botY };
+    } else {
+      // one bend: j curls at the bottom, cane at the top
+      var straightY = p.kind === 'cane' ? botY : topY;
+      var bendY = p.kind === 'cane' ? topY : botY;
+      var tipDir = p.kind === 'cane' ? 1 : -1; // tip curls back toward the middle
+      p0 = { x: x0, y: straightY };
+      p1 = { x: x0 + p.dir * R * 0.12, y: bendY };
+      p2 = { x: x0 - p.dir * R * p.swing, y: bendY + tipDir * R * p.curl };
+    }
+    var r0 = R * 0.30, r1 = R * 0.13; // thick at the straight end, tapered curl
+    var cosT = Math.cos(p.tilt), sinT = Math.sin(p.tilt);
+    var wob = Math.random() * Math.PI * 2;
+    var steps = 44; // overlapping discs merge into one smooth organic stroke
+    for (var i = 0; i <= steps; i++) {
+      var u = i / steps;
+      var x, y, r;
+      if (p3) {
+        var qa = (1 - u) * (1 - u) * (1 - u), qb = 3 * u * (1 - u) * (1 - u),
+            qc = 3 * u * u * (1 - u), qd = u * u * u;
+        x = qa * p0.x + qb * p1.x + qc * p2.x + qd * p3.x;
+        y = qa * p0.y + qb * p1.y + qc * p2.y + qd * p3.y;
+        r = R * (0.12 + 0.10 * Math.sin(Math.PI * u)); // fat middle, thin ends
+      } else {
+        var a = (1 - u) * (1 - u), b = 2 * u * (1 - u), c2 = u * u;
+        x = a * p0.x + b * p1.x + c2 * p2.x;
+        y = a * p0.y + b * p1.y + c2 * p2.y;
+        r = r0 + (r1 - r0) * u;
+      }
+      r *= 1 + 0.07 * Math.sin(u * Math.PI * 3 + wob); // slow organic thickness drift
+      var dx = x - cx, dy = y - cy;
+      ctx.beginPath();
+      ctx.arc(cx + dx * cosT - dy * sinT, cy + dx * sinT + dy * cosT, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // erase an organic bite out of the blob: a centred bite makes a ring, an
+  // edge bite a nibble; a bite reaching past the centre is clamped so it can
+  // never eat the whole figure
+  function carveBite(cx, cy, R, angle, off, size) {
+    var biteR = R * size;
+    if (off < size) biteR = Math.min(biteR, R * (1.05 - off));
+    ctx.globalCompositeOperation = 'destination-out'; // carve...
+    wobblyDisc(cx + Math.cos(angle) * R * off, cy + Math.sin(angle) * R * off,
+      biteR, harmonicSet(2, 5, 2, 0.05, 0.09), 1, 1, 0);
+    ctx.globalCompositeOperation = 'source-over'; // ...then paint normally again
+  }
+
+  // ---------- shape memory ----------
+  // User rule: remember the last 5 generated shapes; a new one must differ
+  // from all of them. "Differ" is checked on a coarse signature — family plus
+  // bucketed traits (direction, stretch, bite size, bumpiness) — so near
+  // identical cousins are blocked too, not just exact repeats.
+  var RECENT_MAX = 5;
+  var recentShapes = [];
+
+  function sector(angle) { // 4 buckets around the circle: 0 right, 1 down, 2 left, 3 up
+    var a = (angle % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+    return Math.floor(a / (Math.PI / 2));
+  }
+
+  function rollShape() {
+    var family = pickFamily();
+    var s = { family: family };
+    if (family === 'stretch') {
+      s.sy = 0.75 + Math.random() * 0.60; // height factor; width = 1/height
+      s.tilt = (Math.random() - 0.5) * 1.1; // up to ~±32°
+      s.hs = harmonicSet(2, 5, 2 + Math.floor(Math.random() * 2), 0.06, 0.12);
+      s.sig = 'stretch:' + (s.sy < 0.93 ? 'flat' : s.sy > 1.07 ? 'tall' : 'round') + ':' + sector(s.tilt);
+    } else if (family === 'crescent') {
+      // sub-species by bite geometry: moon, ring, bigbite, nibble (x2 = two
+      // nibbles). Mirrored/rotated variants share a signature, so the memory
+      // window blocks same-looking crescents.
+      s.hs = harmonicSet(1, 5, 2 + Math.floor(Math.random() * 2), 0.06, 0.14); // lumpy, like the classic cloud
+      s.open = Math.random() * Math.PI * 2; // direction the bite sits
+      var kinds = ['moon', 'ring', 'bigbite', 'nibble'];
+      s.kind = kinds[Math.floor(Math.random() * kinds.length)];
+      if (s.kind === 'moon') { s.off = 0.42 + Math.random() * 0.16; s.bite = 0.42 + Math.random() * 0.20; }
+      else if (s.kind === 'ring') { s.off = Math.random() * 0.12; s.bite = 0.55 + Math.random() * 0.17; }
+      else if (s.kind === 'bigbite') { s.off = 0.30 + Math.random() * 0.15; s.bite = 0.70 + Math.random() * 0.15; }
+      else { // nibble: a small bite at the rim, occasionally two
+        s.off = 0.80 + Math.random() * 0.15; s.bite = 0.18 + Math.random() * 0.12;
+        s.second = Math.random() < 0.35;
+      }
+      s.sig = 'crescent:' + s.kind + (s.second ? ':x2' : '');
+    } else if (family === 'hook') {
+      // sub-species by bend structure: j, cane (curl at the top), snake (S)
+      s.kind = ['j', 'cane', 'snake'][Math.floor(Math.random() * 3)];
+      s.dir = Math.random() < 0.5 ? 1 : -1; // curls left or right
+      s.swing = 0.55 + Math.random() * 0.45; // how far the hook swings out
+      s.curl = 0.30 + Math.random() * 0.25;  // how much it curls back
+      s.tilt = (Math.random() - 0.5) * 1.22; // lean up to ~±35°
+      s.sig = 'hook:' + s.kind; // direction-independent: a mirror is the same shape
+    } else {
+      s.hs = harmonicSet(1, 5, 2 + Math.floor(Math.random() * 2), 0.07, 0.21);
+      var bump = 0, deep = 0;
+      for (var i = 0; i < s.hs.length; i++) { bump += s.hs[i].k; deep = Math.max(deep, s.hs[i].a); }
+      s.sig = 'classic:' + (bump <= 4 ? 'calm' : bump <= 7 ? 'bumpy' : 'wild') + ':' +
+        (deep < 0.15 ? 'soft' : 'deep');
+    }
+    return s;
+  }
+
+  // re-roll until the shape is fresh for the memory window; switching family
+  // from the previous blob is preferred (first 8 attempts), then relaxed
+  function pickShape() {
+    var last = recentShapes[recentShapes.length - 1] || '';
+    for (var attempt = 0; attempt < 14; attempt++) {
+      var s = rollShape();
+      if (recentShapes.indexOf(s.sig) !== -1) continue; // too close to a recent shape
+      if (attempt < 8 && last.indexOf(s.family + ':') === 0) continue; // prefer a family switch
+      return s;
+    }
+    return rollShape(); // extremely unlikely: signature space is much larger than 5
+  }
+
   function newBlob() {
     // the eraser may have left destination-out active; always paint normally here
     ctx.globalCompositeOperation = 'source-over';
@@ -249,68 +457,78 @@ if ('serviceWorker' in navigator) {
     ctx.clearRect(0, 0, W, H);
     undoStack.length = 0; // fresh scene, nothing to undo into
 
-    // one random palette: one colour for the blob, one for the paper, rest to draw with
+    // one random palette: one colour for the blob, one for the paper, the rest
+    // to draw with — the blob's own colour stays in the swatch set
     var palette = pick(PALETTES).slice();
-    var blobColor = palette.splice(Math.floor(Math.random() * palette.length), 1)[0];
-    var bgColor = palette.splice(Math.floor(Math.random() * palette.length), 1)[0];
+    var blobIndex = Math.floor(Math.random() * palette.length);
+    var bgIndex = Math.floor(Math.random() * (palette.length - 1)); // any other slot
+    if (bgIndex >= blobIndex) bgIndex++;
+    var blobColor = palette[blobIndex];
+    var bgColor = palette.splice(bgIndex, 1)[0]; // leaves the paper colour out of the swatches only
     applyBackground(bgColor);
 
-    // crazy cloud-like figure: radius modulated by random harmonics (always smooth,
-    // no corners), plus lumps that merge into the silhouette and a detached puff
+    // anchor point shared by every family: centred, slightly above centre
     var cx = W / 2;
-    var cy = H * 0.44; // slightly above centre, clear of the toolbar
+    var cy = H * 0.44;
     var R = Math.min(W, H) * (0.20 + Math.random() * 0.09);
-    var harmonics = [];
-    var hCount = 2 + Math.floor(Math.random() * 2); // 2-3
-    for (var i = 0; i < hCount; i++) {
-      harmonics.push({
-        k: 2 + Math.floor(Math.random() * 4), // 2-5 lobes
-        a: 0.08 + Math.random() * 0.14,
-        p: Math.random() * Math.PI * 2
-      });
-    }
-    function radiusAt(t) {
-      var r = 1;
-      for (var hi = 0; hi < harmonics.length; hi++) {
-        var hm = harmonics[hi];
-        r += hm.a * Math.sin(hm.k * t + hm.p);
-      }
-      return R * Math.max(r, 0.45);
-    }
-
     ctx.fillStyle = blobColor;
-    ctx.beginPath();
-    var steps = 84; // dense sampling keeps the silhouette round even as straight segments
-    for (var s = 0; s <= steps; s++) {
-      var t = (s / steps) * Math.PI * 2;
-      var r = radiusAt(t);
-      var x = cx + Math.cos(t) * r;
-      var y = cy + Math.sin(t) * r;
-      if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+
+    var shape = pickShape();
+    var family = shape.family;
+    var hs = shape.hs, sx = 1, sy = 1, tilt = 0;
+
+    if (family === 'stretch') {
+      sy = shape.sy;
+      sx = 1 / sy; // area stays roughly constant
+      tilt = shape.tilt;
+      R = R / (0.6 + 0.4 * Math.max(sx, sy)); // tall/flat blobs shrink so they still fit
+      wobblyDisc(cx, cy, R, hs, sx, sy, tilt);
+    } else if (family === 'crescent') {
+      // disc minus bite(s): moon, ring, wide-open C or a nibbled cookie.
+      // the bite can only touch the blob — the canvas holds nothing else
+      wobblyDisc(cx, cy, R, hs, 1, 1, 0);
+      carveBite(cx, cy, R, shape.open, shape.off, shape.bite);
+      if (shape.second) {
+        carveBite(cx, cy, R, shape.open + 1.0 + Math.random() * 1.2,
+          0.80 + Math.random() * 0.15, 0.15 + Math.random() * 0.13);
+      }
+    } else if (family === 'hook') {
+      R = Math.min(R, H * 0.19); // leave room for the tilt to stay clear of the toolbar
+      drawHook(cx, cy, R, shape);
+    } else {
+      // classic cloud: lobes 1-5 (a 1-lobe wobble makes eggs and pears)
+      wobblyDisc(cx, cy, R, hs, 1, 1, 0);
     }
-    ctx.closePath();
-    ctx.fill();
 
     // cloud lumps hugging the edge, same colour so they melt into the figure
-    var lumps = Math.floor(Math.random() * 4); // 0-3
-    for (var l = 0; l < lumps; l++) {
-      var la = Math.random() * Math.PI * 2;
-      var lr = radiusAt(la) * (0.80 + Math.random() * 0.18);
-      ctx.beginPath();
-      ctx.arc(cx + Math.cos(la) * lr, cy + Math.sin(la) * lr, R * (0.16 + Math.random() * 0.22), 0, Math.PI * 2);
-      ctx.fill();
+    // (radial families only: crescents and hooks already have their own character)
+    if (family === 'classic' || family === 'stretch') {
+      var lumps = Math.floor(Math.random() * 4); // 0-3
+      var cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+      for (var l = 0; l < lumps; l++) {
+        var la = Math.random() * Math.PI * 2;
+        var lr = radiusAt(hs, la) * (0.80 + Math.random() * 0.18);
+        var lx = Math.cos(la) * lr * R * sx, ly = Math.sin(la) * lr * R * sy;
+        ctx.beginPath();
+        ctx.arc(cx + lx * cosT - ly * sinT, cy + lx * sinT + ly * cosT,
+          R * (0.16 + Math.random() * 0.22) * (sx + sy) / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // occasional small detached puff, like a cloud shedding one
     if (Math.random() < 0.3) {
       var sa = Math.random() * Math.PI * 2;
       var sd = R * (1.25 + Math.random() * 0.35);
-      var sx = Math.min(Math.max(cx + Math.cos(sa) * sd, 30), W - 30);
-      var sy = Math.min(Math.max(cy + Math.sin(sa) * sd, 90), H - 270);
+      var px = Math.min(Math.max(cx + Math.cos(sa) * sd, 30), W - 30);
+      var py = Math.min(Math.max(cy + Math.sin(sa) * sd, 90), H - 270);
       ctx.beginPath();
-      ctx.arc(sx, sy, R * (0.10 + Math.random() * 0.10), 0, Math.PI * 2);
+      ctx.arc(px, py, R * (0.10 + Math.random() * 0.10), 0, Math.PI * 2);
       ctx.fill();
     }
+
+    recentShapes.push(shape.sig); // remember: the next 5 shapes must differ from this one
+    if (recentShapes.length > RECENT_MAX) recentShapes.shift();
 
     buildSwatches(palette);
     updateLimitY(); // toolbar geometry follows the viewport
@@ -345,11 +563,13 @@ if ('serviceWorker' in navigator) {
 
   function currentSize() { return sizes[tool]; }
 
-  // the canvas ends at the toolbar: strokes cannot go below its top edge
+  // the canvas ends at the toolbar: strokes cannot go below its top edge.
+  // In the flex column the canvas bottom IS the toolbar top, so the canvas
+  // height itself is the limit — no measured offsets and no floor that could
+  // ever let a stroke slip below a misplaced toolbar.
   var limitY = Infinity;
   function updateLimitY() {
-    var rect = document.querySelector('.toolbar').getBoundingClientRect();
-    limitY = Math.max(rect.top, H * 0.5); // sanity floor
+    limitY = H;
   }
 
   // keep the brush fully on the canvas: when the finger leaves the edge,
@@ -526,10 +746,18 @@ if ('serviceWorker' in navigator) {
   setup();
   newBlob();
   var resizeTimer = null;
-  window.addEventListener('resize', function () {
+  function refitSoon() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(refit, 150); // settle first, then re-fit once
-  });
+  }
+  if (window.ResizeObserver) {
+    // fires whenever the canvas box truly changes — dvh updates, toolbar
+    // collapse, rotation — including the iOS launch transient that window
+    // resize events miss in standalone mode
+    new ResizeObserver(refitSoon).observe(canvas);
+  } else {
+    window.addEventListener('resize', refitSoon);
+  }
   window.addEventListener('load', refit);
 })();
 </script>

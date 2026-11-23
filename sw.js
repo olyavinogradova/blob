@@ -1,6 +1,6 @@
 // Blob service worker: offline support with a versioned cache.
 // Bump CACHE_VERSION to ship an update (the file change itself triggers the SW update).
-var CACHE_VERSION = 'v4';
+var CACHE_VERSION = 'v5';
 var CACHE = 'blob-cache-' + CACHE_VERSION;
 var CORE = ['./', './index.html', './manifest.json', './favicon.png'];
 var OPTIONAL = ['./icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];

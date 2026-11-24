@@ -18,8 +18,7 @@
   /* the body is the single viewport container: fixed to the layout viewport's
      top-left, sized to the dynamic viewport (dvh) so it tracks the real visible
      height as browser chrome comes and goes. Canvas and toolbar form one flex
-     column: the canvas ends exactly where the toolbar begins — by structure,
-     not by measured offsets. */
+     column: the canvas ends exactly where the toolbar begins. */
   body {
     position:fixed; top:0; left:0; right:0;
     height:100%; height:100dvh; /* fallback for engines without dvh */
@@ -91,6 +90,30 @@
   }
   .swatch.active { box-shadow:0 0 0 2px rgba(255,255,255,.9), 0 0 0 4px rgba(58,55,51,.55); }
   .swatch:active { transform:scale(.9); }
+
+  /* onboarding bubble: a rounded speech bubble with a small tail underneath.
+     The three look options arrive as custom properties (--bubble-*), set per
+     instance by createBubble(); the rest of this block is the component's own
+     look. The tail paints itself with the very same --bubble-bg, so it can
+     never mismatch, and casts the very same shadow as the card. */
+  .bubble {
+    --shadow:0 6px 30px rgba(58,55,51,.15); /* the toolbar's shadow */
+    position:absolute; left:0; right:0; margin:0 auto; /* centred by itself; the parent sets top */
+    width:max-content; max-width:85%; /* as wide as the text, never past 85% of the parent */
+    padding:12px 18px; border-radius:24px;
+    background:var(--bubble-bg); color:var(--bubble-ink);
+    font-family:var(--bubble-font); font-size:17px; font-weight:700; line-height:1.3;
+    text-align:center; overflow-wrap:break-word;
+    white-space:pre-line; /* wraps by itself; a "\n" in the text forces a line break */
+    text-wrap:balance; /* where it does wrap, the lines come out even (older iOS: plain wrap) */
+    box-shadow:var(--shadow);
+    pointer-events:none; /* a hint never steals touches from the canvas under it */
+  }
+  .bubble::after { /* tail; its top pixel hides under the card so no seam shows */
+    content:""; position:absolute; top:calc(100% - 1px); left:50%; margin-left:-9px;
+    border:9px solid transparent; border-bottom:0; border-top:12px solid var(--bubble-bg);
+    filter:drop-shadow(var(--shadow)); /* a box-shadow would outline the box, not the triangle */
+  }
 
   /* screenshot result overlay */
   .shot-overlay {
@@ -191,10 +214,8 @@ if ('serviceWorker' in navigator) {
   var W, H;
 
   // Canvas always fits the real viewport. The CSS column sizes the canvas
-  // element; the bitmap is measured from the element's actual box (never from
-  // innerHeight, which disagrees with the fixed-position UI at launch and
-  // between browser/PWA modes). Whenever the box genuinely changes we re-fit
-  // and start fresh (no drawing preservation across size changes, per spec).
+  // element; the bitmap is measured from the element's actual box. Whenever
+  // the box genuinely changes we re-fit and start fresh.
   function setup() {
     var rect = canvas.getBoundingClientRect();
     W = Math.max(1, Math.round(rect.width));
@@ -383,10 +404,10 @@ if ('serviceWorker' in navigator) {
   }
 
   // ---------- shape memory ----------
-  // User rule: remember the last 5 generated shapes; a new one must differ
-  // from all of them. "Differ" is checked on a coarse signature — family plus
-  // bucketed traits (direction, stretch, bite size, bumpiness) — so near
-  // identical cousins are blocked too, not just exact repeats.
+  // remember the last 5 generated shapes; a new one must differ from all of
+  // them. "Differ" is checked on a coarse signature — family plus bucketed
+  // traits (direction, stretch, bite size, bumpiness) — so near identical
+  // cousins are blocked too, not just exact repeats.
   var RECENT_MAX = 5;
   var recentShapes = [];
 
@@ -565,8 +586,7 @@ if ('serviceWorker' in navigator) {
 
   // the canvas ends at the toolbar: strokes cannot go below its top edge.
   // In the flex column the canvas bottom IS the toolbar top, so the canvas
-  // height itself is the limit — no measured offsets and no floor that could
-  // ever let a stroke slip below a misplaced toolbar.
+  // height itself is the limit.
   var limitY = Infinity;
   function updateLimitY() {
     limitY = H;
@@ -635,6 +655,7 @@ if ('serviceWorker' in navigator) {
     if (activePointerId !== null) return; // ignore extra fingers
     activePointerId = e.pointerId;
     drawing = true;
+    dismissOnboarding(); // the first stroke, with any tool, ends the onboarding for good
     pushUndo(); // snapshot before the stroke, so Undo cancels the whole line
     last = clampPoint({ x: e.clientX, y: e.clientY });
     prevMid = last;
@@ -742,9 +763,65 @@ if ('serviceWorker' in navigator) {
     }
   });
 
+  // ---------- onboarding bubble ----------
+  // Reusable speech bubble: a rounded card with a small tail underneath that
+  // points at whatever sits below it. The four options are the only outside
+  // knobs; the three look options are stored as CSS custom properties that the
+  // stylesheet reads back — the tail through the very same --bubble-bg, so
+  // changing the bubble colour moves the tail with it. Returns the element,
+  // centred horizontally and otherwise unpositioned: where it goes (style.top,
+  // appendChild) is the caller's decision.
+  var BUBBLE_DEFAULTS = {
+    text: 'Нарисуй, что ты видишь\nв этом пятне', // the \n is the line break after "видишь"
+    fontFamily: 'Nunito, sans-serif', // falls back to the system font where Nunito is not installed
+    textColor: '#292929',
+    backgroundColor: '#FFF8ED'
+  };
+
+  function createBubble(options) {
+    var o = options || {};
+    var el = document.createElement('div');
+    el.className = 'bubble';
+    el.textContent = o.text || BUBBLE_DEFAULTS.text;
+    el.style.setProperty('--bubble-font', o.fontFamily || BUBBLE_DEFAULTS.fontFamily);
+    el.style.setProperty('--bubble-ink', o.textColor || BUBBLE_DEFAULTS.textColor);
+    el.style.setProperty('--bubble-bg', o.backgroundColor || BUBBLE_DEFAULTS.backgroundColor);
+    return el;
+  }
+
+  // ---------- onboarding ----------
+  // One bubble, on the first open of the app on this device — and never again
+  // once the first stroke starts. It is not tied to newBlob(): a new blob
+  // never brings it back (while unseen, it simply stays until that stroke).
+  // "First time" needs no cookies: localStorage is a small notepad the browser
+  // keeps for this site on the device, and nothing in it is ever sent out.
+  var ONBOARDING_KEY = 'blob.onboardingSeen';
+  var onboardingBubble = null; // exists only while the bubble is on screen
+
+  function onboardingSeen() {
+    try { return !!localStorage.getItem(ONBOARDING_KEY); }
+    catch (err) { return false; } // storage refused (private mode): treat as a first time
+  }
+
+  function showOnboarding() {
+    onboardingBubble = createBubble();
+    onboardingBubble.lang = 'ru'; // the text is Russian; the page itself is English
+    onboardingBubble.style.top = 'calc(62px + env(safe-area-inset-top))'; // the slot under the top buttons
+    document.body.appendChild(onboardingBubble);
+  }
+
+  function dismissOnboarding() {
+    if (!onboardingBubble) return;
+    document.body.removeChild(onboardingBubble);
+    onboardingBubble = null;
+    try { localStorage.setItem(ONBOARDING_KEY, '1'); } // remembered only now: leaving without drawing is still "not seen"
+    catch (err) {} // cannot remember it: the bubble will simply show again next time
+  }
+
   // ---------- go ----------
   setup();
   newBlob();
+  if (!onboardingSeen()) showOnboarding(); // first open on this device
   var resizeTimer = null;
   function refitSoon() {
     clearTimeout(resizeTimer);

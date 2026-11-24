@@ -75,6 +75,19 @@ If the history cannot be adequately reviewed, recommend a clean release history 
 
 Do not rewrite or delete history automatically without explicit approval.
 
+### 6. Code comments
+
+Before publishing, read every comment in the code (HTML, CSS, JavaScript).
+
+Comments may explain what the code does and why it is written that way. They
+must not keep a record of:
+
+- decisions made by the site owner, or the requests and feedback behind them;
+- attempts, earlier versions or approaches that did not work.
+
+Delete such comments, or the part of a comment that holds this information,
+before the release.
+
 ## Release decision
 
 **BLOCK:** A confirmed critical issue exists.
@@ -96,5 +109,6 @@ Provide:
 5. Licensing and data-flow uncertainties.
 6. Required fixes and human approvals.
 7. Final recommendation: BLOCK, REVIEW REQUIRED, or PASS WITH LIMITATIONS.
+8. The comment review: the files read and each comment removed.
 
 A human must approve the release after reviewing the report. Do not claim that a successful review establishes legal compliance or eliminates all risk.

@@ -50,6 +50,20 @@ undo pops and redraws. Memory-only, cleared on `newBlob()`.
 through `navigator.share({files})`; iOS 16+ may omit "Save to Photos" from the
 share sheet, so the overlay image supports long-press → "Add to Photos".
 Desktop fallback: plain download of `blob.png`.
+- **Onboarding bubble** (added 2026-11-24): `createBubble({ text, fontFamily, textColor, backgroundColor })` returns a speech-bubble element (`.bubble`;
+defaults in `BUBBLE_DEFAULTS`, rules in design decision 8). The three look
+options become CSS custom properties on the element (`--bubble-font/ink/bg`)
+and the tail reads the very same `--bubble-bg`, so it can never mismatch;
+shape, padding and wrapping are the component's own. It is as wide as its
+text (capped at 85% of its parent), centres itself, and its caller positions
+it (`style.top`). DOM only and `pointer-events:none` — never in the canvas,
+so never in a saved screenshot, and it never shrinks the drawing area.
+Shown once per device: on the first open only, in the slot under the top
+buttons (`calc(62px + env(safe-area-inset-top))`), removed for good by the
+first stroke (canvas `pointerdown`, any tool). Not tied to `newBlob()`.
+"First time" = `localStorage` key `blob.onboardingSeen`, written only at
+dismissal — no cookies, nothing sent anywhere; if storage is refused
+(private mode) the bubble simply shows again next time.
 - **Service worker** (`sw.js`): versioned cache (`blob-cache-<CACHE_VERSION>`),
 network-first for navigations (deployed updates arrive on next online load),
 cache-first for same-origin assets, old caches deleted on activation, icons
@@ -61,76 +75,93 @@ cached best-effort. All paths relative — works under the Pages `/blob/` subpat
 1. **Blob figures only**: smooth, cloud-like, rounded. NO sharp/angular mode,
 
    NO outline/stroke around the figure (filled silhouettes only — the hook
-    family is a thick *filled* stroke, not a contour). The silhouette comes
-    from one of four randomly picked "families" (weights 40/20/20/20), all
-    solid-fill and corner-free (user request 2026-11-23: more variation, incl.
-    C and J shapes):
+     family is a thick *filled* stroke, not a contour). The silhouette comes
+     from one of four randomly picked "families" (weights 40/20/20/20), all
+     solid-fill and corner-free (user request 2026-11-23: more variation, incl.
+     C and J shapes):
    - *classic* — radius modulated by 2–3 random sine harmonics (k 1–5; a k=1
-   lobe makes eggs/pears) + 0–3 edge lumps;
+    lobe makes eggs/pears) + 0–3 edge lumps;
    - *stretch* — classic wobble squashed/stretched (height factor 0.75–1.35,
-   width = 1/height) plus a random tilt up to ~±32°;
+    width = 1/height) plus a random tilt up to ~±32°;
    - *crescent* — lumpy disc with organic bite(s) carved out via
-   `destination-out`. Sub-species by bite geometry (added 2026-11-23 after
-   user feedback that crescents looked alike): *moon* (deep side bite),
-   *ring* (centred bite → donut), *bigbite* (wide-open C), *nibble* (small
-   rim bite, 35% chance of a second one). The bite is clamped so it can
-   never erase the whole figure.
+    `destination-out`. Sub-species by bite geometry (added 2026-11-23 after
+    user feedback that crescents looked alike): *moon* (deep side bite),
+    *ring* (centred bite → donut), *bigbite* (wide-open C), *nibble* (small
+    rim bite, 35% chance of a second one). The bite is clamped so it can
+    never erase the whole figure.
    - *hook* — thick round-ended stroke along a curve with a slow thickness
-   drift, tilted up to ~±35°. Sub-species by bend structure (added
-   2026-11-23 after user feedback that J's looked alike): *j* (curl at the
-   bottom), *cane* (curl at the top), *snake* (S-curve, fat middle,
-   tapered ends).
-    Plus ~30% chance of a small detached puff (all families). Goal:
-    variative, imagination-sparking.
-    **Shape memory (user rule, 2026-11-23)**: the last 5 generated shapes are
-    remembered; a new one must differ from all of them. Signatures are
-    perceptual — family + sub-species, with mirrored/rotated variants counting
-    as the same shape — so same-looking cousins are blocked, not just exact
-    repeats. Repeating the previous blob's family is also avoided when
-    possible.
+    drift, tilted up to ~±35°. Sub-species by bend structure (added
+    2026-11-23 after user feedback that J's looked alike): *j* (curl at the
+    bottom), *cane* (curl at the top), *snake* (S-curve, fat middle,
+    tapered ends).
+     Plus ~30% chance of a small detached puff (all families). Goal:
+     variative, imagination-sparking.
+     **Shape memory (user rule, 2026-11-23)**: the last 5 generated shapes are
+     remembered; a new one must differ from all of them. Signatures are
+     perceptual — family + sub-species, with mirrored/rotated variants counting
+     as the same shape — so same-looking cousins are blocked, not just exact
+     repeats. Repeating the previous blob's family is also avoided when
+     possible.
 2. **Six fixed palettes** (Playful Garden, Candy Universe, Electric Nature,
 
    Midnight Cinema, Paper & Ink, Neon Lagoon — added 2026-11-23 at the user's
-    request) — constants at the top of the script. Per blob:
-    random palette, random distinct colour for the blob, random distinct colour
-    for the background (body bg + `--paper` + `theme-color` meta update); the
-    remaining seven — **including the blob's own colour** (user rule 2026-11-23:
-    "add blob colour to the palette") — become the swatches; default selection =
-    first swatch.
+     request) — constants at the top of the script. Per blob:
+     random palette, random distinct colour for the blob, random distinct colour
+     for the background (body bg + `--paper` + `theme-color` meta update); the
+     remaining seven — **including the blob's own colour** (user rule 2026-11-23:
+     "add blob colour to the palette") — become the swatches; default selection =
+     first swatch.
 3. **Toolbar**: circled floating pill. Since 2026-11-23 it floats via margins
 
    (`0 12px calc(6px + env(safe-area-inset-bottom))`) as the last child of the
-    body flex column — same visual as the old `position:fixed` version, but it
-    can never desync from the canvas (a fixed-position toolbar measured against
-    a JS-sized canvas was the root cause of the PWA "toolbar too high / brush
-    below toolbar" bug). The `env()` part self-adapts: home-indicator zone in
-    the installed PWA, zero above Safari's own toolbar in the browser. Do NOT
-    dock it flush (tried, rejected: collided with Safari's bar / felt wrong in
-    PWA).
+     body flex column — same visual as the old `position:fixed` version, but it
+     can never desync from the canvas (a fixed-position toolbar measured against
+     a JS-sized canvas was the root cause of the PWA "toolbar too high / brush
+     below toolbar" bug). The `env()` part self-adapts: home-indicator zone in
+     the installed PWA, zero above Safari's own toolbar in the browser. Do NOT
+     dock it flush (tried, rejected: collided with Safari's bar / felt wrong in
+     PWA).
 4. **Icon-only buttons** in the toolbar (no "Brush"/"Eraser" words), long size
 
    slider, separate remembered sizes per tool (defaults 8 / 28).
 5. **Top-right buttons**: Undo ↶, New blob ✦ (sparkle), Screenshot 📷 — in that
 
    order. There is deliberately NO Clear button (screenshot replaced it; New blob
-    covers fresh starts).
+     covers fresh starts).
 6. **No rotation special-casing**: size changes just re-fit + fresh blob.
 7. Title/name: **Blob** everywhere (manifest, apple metas, page title).
+8. **Onboarding bubble** (user-set 2026-11-24): soft cream (`#FFF8ED`) speech
+
+   bubble, dark text (`#292929`), centred, with a small triangular tail at
+     the bottom pointing at the blob. No character, face, arrow or other
+     illustrations — bubble and text only (the earlier smile-and-arrow draft in
+     `drafts/onboarding/` is superseded). Default text "Нарисуй, что ты видишь /
+     в этом пятне" with a manual line break after "видишь" (`\n` in the text —
+     same two lines on every phone). Font stack `"Nunito", sans-serif` but
+     **not bundled** (user choice: no third-party files) — in practice iPhones
+     show the system font. Shown on the first open only, disappears at the
+     first touch on the canvas with any tool, and never returns after blob
+     renewal.
 
 ## Workflow rules (user-set — hard rules)
 
 - **Never** `git push` **or publish without the user's explicit approval.** Commit
-locally, then ask. (Standing rule from 2026-11-22.)
+locally, then ask. 
 - The user asks for a `safety.md` **release review** before publishing rounds —
 run the checks from `safety.md` in the repo folder and report in its format
 (blockers / warnings / passed, verdict).
+- **Code comments**: before publishing, every comment in  
+the code is checked, and any that records the user's decisions, the requests  
+behind them, or attempts that did not work is deleted (safety.md check 6).  
+Comments explain the code; decisions and history are recorded in this guide,  
+not in the code.
 - **Commit identity**: `olyavinogradova <blob@example.com>` set repo-local
 - `.gitignore` is **deny-by-default** (`/`* then `!`-whitelist of the site
-  files). A new file is unpublishable until a `!/path` line is added.
-  `AGENTS.md` and `safety.md` are published (user decision 2026-11-23);
-  `blob-icon-assets/` and `.zcode/` stay local.
-- **Verification method**: serve locally (`python3 -m http.server 8123`) and test
-in the ZCode in-app browser at iPhone viewport 390×844 (pointer drags draw;
+files). A new file is unpublishable until a `!/path` line is added.
+`AGENTS.md` and `safety.md` are published;  
+`blob-icon-assets/`, `.zcode/` and `drafts/` (local-only experiments, preview
+pages and screenshots) stay local.
+- **Verification method**: serve locally (`python3 -m http.server 8123`) and test in in-app browser at iPhone viewport 390×844 (pointer drags draw;  
 canvas pixels can be sampled via `evaluate` for ground truth — vision models
 misjudge colours/positions, prefer programmatic checks). The user reports
 real-device bugs via phone screenshots — analyze them, but first check whether
@@ -149,9 +180,17 @@ four-family generator + 5-shape memory (40-tap stress test: 40/40 distinct,
 zero bound violations; 8-screen pairwise check: all different); dvh flex-column
 layout round (canvas bottom === toolbar top at every tested size, strokes clamp
 at the canvas edge, resize/restore re-fits with a fresh blob, screenshot export
-dimensions unchanged).
+dimensions unchanged); onboarding bubble round (first open shows it; six New
+blob taps and a resize leave the same single bubble in place; a toolbar tap
+does not dismiss it; the first stroke — brush or eraser, even one starting on
+the bubble — removes it and sets the flag; it stays gone across New blob, Undo
+and reload; drawing area and toolbar pixel-identical to before; saved
+screenshots contain no bubble; all four options independent in the gallery,
+tail follows the colour, wrapping checked at 320–430 px and inside a narrow
+parent; refused storage shows it again next time).
 Device-only (rely on user feedback): Add to Home Screen flow, share sheet on iOS,
-real safe-area insets.
+real safe-area insets, and the onboarding bubble as installed (real insets, and
+how iOS keeps the "seen" flag).
 
 ## Known caveats
 
@@ -165,3 +204,16 @@ suspecting the code.
 bottom `H*0.62`, puff `H-270`). Since the 2026-11-23 layout round, `H`
 excludes the toolbar entirely, so hooks and puffs stay inside the canvas by
 construction — the old landscape overlap concern is gone.
+- **Onboarding bubble vs. tall blobs (open design question, 2026-11-24).** At
+390×844 in the browser the bubble never meets the blob (0 of 120 sampled). In
+the installed app there is less height under the notch insets: the card
+covers the top of the blob in ~18% of blobs and the tail alone touches it in
+~18% more (120 sampled). It vanishes at the first touch, so the contact is
+brief. Options if the user dislikes it: accept; move the bubble below the
+blob with a tail on top; re-roll the first blob until it leaves room. In
+landscape there is no free space above the blob at all (pre-existing).
+- "First open" means first open on that device, in that browser or app. A
+Safari tab and the Home Screen app are believed to keep separate storage
+(unverified on a device), so installing Blob shows the bubble once more.
+Clearing website data, private browsing, or iOS deleting an unused site's
+storage (reported for Safari tabs, not for installed apps) shows it again.
